@@ -1,0 +1,156 @@
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.*;
+/**
+ * Đọc file CSV kết quả phân cụm, dọn text review (bỏ HTML, gộp khoảng trắng),
+ * in mẫu theo từng cụm.
+ *
+ * Cấu hình:
+ * - csvFile: đường dẫn file CSV xuất từ Python.
+ * - samplePerCluster: số mẫu hiển thị cho mỗi cụm.
+ * - maxChars: số ký tự tối đa hiển thị cho mỗi review (rút gọn).
+ */
+public class RunModel {
+    // Cấu hình
+    static final String csvFile = "IMDB_TFIDF_Clustered.csv";
+    static final int samplePerCluster =5; // sửa ở đây nếu muốn khác
+    static final int maxChars = 200;  // độ dài tối đa của review hiển thị
+
+    public static void main(String[] args) {
+        List<String[]> rows = new ArrayList<>();
+        try (BufferedReader br = Files.newBufferedReader(Paths.get(csvFile), StandardCharsets.UTF_8)) {
+            String headerLine = br.readLine();
+            if (headerLine == null) {
+                System.err.println("File rong hoac khong tim thay header.");
+                return;
+            }
+            String[] header = parseCSVLine(headerLine);
+            // Tìm index của các cột quan trọng
+            int idxReview = findColumnIndex(header, "review");
+            // int idxSentiment = findColumnIndex(header, "sentiment"); // <--- Bỏ đọc cột Sentiment
+            int idxCluster = findColumnIndex(header, "cluster");
+
+            if (idxReview == -1) {
+                System.err.println("Khong tim thay cot 'review' trong header.");
+                return;
+            }
+            if (idxCluster == -1) {
+                System.err.println("Khong tim thay cot 'cluster' trong header.");
+                return;
+            }
+            // đọc tất cả dòng vào memory (nếu file quá lớn có thể đổi cách)
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] fields = parseCSVLine(line);
+                rows.add(fields);
+            }
+
+            // Gom mẫu theo cluster (Map<clusterValue, List<RowIndex>>)
+            Map<String, List<Integer>> samples = new LinkedHashMap<>();
+            for (int i = 0; i < rows.size(); i++) {
+                String[] f = rows.get(i);
+                String clusterVal = safeGet(f, idxCluster);
+                samples.computeIfAbsent(clusterVal, k -> new ArrayList<>());
+                if (samples.get(clusterVal).size() < samplePerCluster) {
+                    samples.get(clusterVal).add(i);
+                }
+            }
+
+            // In đẹp (chỉ giữ Cluster và Review)
+            System.out.println("=== KET QUA PHAN CUM (DA LAM SACH REVIEW) ===");
+            System.out.printf("%-8s | %s%n", "Cluster", "Review (rut gon)"); // 
+            System.out.println("--------------------------------------------------------------------------------");
+
+            for (Map.Entry<String, List<Integer>> e : samples.entrySet()) {
+                String clusterVal = e.getKey();
+                System.out.println("\nCUM " + clusterVal);
+                for (int idx : e.getValue()) {
+                    String[] f = rows.get(idx);
+                    String review = idxReview >= 0 ? safeGet(f, idxReview) : "";
+                    // Bỏ dòng lấy sentiment: String sentiment = idxSentiment >= 0 ? safeGet(f, idxSentiment) : "";
+                    String clean = cleanText(review, maxChars);
+                    
+                    // Chỉ in Cluster và Review
+                    System.out.printf("%-8s | %s%n", clusterVal, clean); 
+                }
+            }
+
+            System.out.println("\n(Da hien thi toi da " + samplePerCluster + " mau cho moi cum.)");
+
+        } catch (IOException ex) {
+            System.err.println("Loi doc file: " + ex.getMessage());
+        }
+    }
+    //các hàm phụ trợ: findColumnIndex, safeGet, cleanText, parseCSVLine)
+    private static int findColumnIndex(String[] header, String keyword) {
+        for (int i = 0; i < header.length; i++) {
+            if (header[i] == null) continue;
+            String h = header[i].trim().toLowerCase();
+            if (h.equals(keyword.toLowerCase()) || h.contains(keyword.toLowerCase())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    
+    private static String safeGet(String[] arr, int i) {
+        if (i < 0 || i >= arr.length) return "";
+        return arr[i] == null ? "" : arr[i];
+    }
+    
+    private static String cleanText(String s, int maxChars) {
+        if (s == null) return "";
+        //kiểm tra <br/> và các thẻ HTML khác còn hay không
+        String noHtml = s.replaceAll("(?i)<br\\s*/?>", " ");
+        noHtml = noHtml.replaceAll("<[^>]+>", " ");// loại bỏ thẻ HTML nếu còn
+        // decode đơn giản các entity thường gặp (nếu cần mở rộng)
+        noHtml = noHtml.replace("&quot;", "\"").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">");
+        // chuẩn hóa whitespace
+        noHtml = noHtml.replaceAll("\\s+", " ").trim();
+        // cắt ngắn
+        if (noHtml.length() > maxChars) {
+            return noHtml.substring(0, maxChars).trim() + "...";
+        } else if (noHtml.length() == 0) {
+            return "(empty)";
+        } else {
+            return noHtml;
+        }
+    }
+    
+    private static String[] parseCSVLine(String line) {
+        List<String> fields = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inQuotes = false;
+        int len = line.length();
+        for (int i = 0; i < len; i++) {
+            char c = line.charAt(i);
+            if (inQuotes) {
+                if (c == '"') {
+                    // kiểm tra escape double quote ""
+                    if (i + 1 < len && line.charAt(i + 1) == '"') {
+                        cur.append('"');
+                        i++; // skip next quote
+                    } else {
+                        inQuotes = false; // end quote
+                    }
+                } else {
+                    cur.append(c);
+                }
+            } else {
+                if (c == ',') {
+                    fields.add(cur.toString());
+                    cur.setLength(0);
+                } else if (c == '"') {
+                    inQuotes = true;
+                } else {
+                    cur.append(c);
+                }
+            }
+        }
+        fields.add(cur.toString());
+        return fields.toArray(new String[0]);
+    }
+}
