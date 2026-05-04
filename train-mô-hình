@@ -1,0 +1,58 @@
+# Huấn luyện mô hình
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import joblib
+print("Đang tải dữ liệu đã tiền xử lý...")
+# --- 1. Đọc dữ liệu đã tiền xử lý ---
+df = pd.read_csv("IMDB_TFIDF_Processed.csv")
+print(f"Dữ liệu đã tải: {df.shape}")
+
+# --- 2. Tách dữ liệu ---
+X = df.drop(columns=['sentiment']).values
+sentiments = df['sentiment']
+
+# --- 3. Huấn luyện KMeans ---
+k = 3  # số cụm (có thể thay đổi)
+kmeans = KMeans(n_clusters=k, random_state=42, n_init=10) #tham số ngâu nhiên mặc định là 42
+labels = kmeans.fit_predict(X) #dự đoán nhãn của cluster
+
+# --- 4. Đánh giá mô hình ---
+silhouette = silhouette_score(X, labels)
+print(f"Silhouette Score: {silhouette:.4f}")
+
+# --- 5. Gắn nhãn cụm và lưu kết quả ---
+df_result = pd.DataFrame(X)
+df_result['Cluster'] = labels
+df_result['sentiment'] = sentiments
+# Gộp text gốc (tùy chọn nếu bạn muốn xem review)
+df_raw = pd.read_csv("IMDB Dataset.csv")
+df_raw = df_raw.iloc[:len(df_result)]  # căn chỉnh số dòng nếu cần
+df_raw['Cluster'] = labels
+df_raw.to_csv("IMDB_TFIDF_Clustered.csv", index=False, encoding='utf-8-sig')
+print("Đã lưu file kết quả: IMDB_TFIDF_Clustered.csv")
+
+# --- 6. Lưu mô hình ---
+joblib.dump(kmeans, "kmeans_model.pkl")
+print("Đã lưu mô hình huấn luyện: kmeans_model.pkl")
+
+# --- 7. Hiển thị mẫu tiêu biểu ---
+print("\n=== KẾT QUẢ PHÂN CỤM IMDB ===")
+print("Cluster | Sentiment | Review (rút gọn)")
+print("------------------------------------------------------------")
+for cluster in range(k):
+    df_cluster = df_raw[df_raw['Cluster'] == cluster].head(5) #lấy số lượng dl mẫu
+    print(f"\nCỤM {cluster}")
+    for _, row in df_cluster.iterrows():
+        short_review = (row['review'][:150] + "...") if len(row['review']) > 150 else row['review']
+        print(f"{row['Cluster']} | {row['sentiment']:<9} | {short_review}")
+        
+print("\n=== PHÂN TÍCH TỈ LỆ SENTIMENT TRONG TỪNG CỤM ===")
+for cluster in range(k):
+    subset = df_raw[df_raw['Cluster'] == cluster]
+    counts = subset['sentiment'].value_counts(normalize=True) * 100
+    pos = counts.get('positive', 0)
+    neg = counts.get('negative', 0)
+    print(f"Cụm {cluster}: Positive {pos:.1f}% | Negative {neg:.1f}% | Tổng {len(subset)} mẫu")
+
+print("\nHoàn tất huấn luyện và lưu mô hình.")
