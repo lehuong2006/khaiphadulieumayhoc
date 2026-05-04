@@ -1,0 +1,59 @@
+import pandas as pd
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+import joblib
+try:
+    import contractions
+    _HAS_CONTRACTIONS = True
+except Exception:
+    _HAS_CONTRACTIONS = False
+print("Đang đọc và tiền xử lý dữ liệu...")
+# --- 1. Đọc dữ liệu gốc ---
+df = pd.read_csv("IMDB Dataset.csv")  # cột: review, sentiment
+df.dropna(subset=['review'], inplace=True)
+df['review'] = df['review'].astype(str)
+print(f" Đã đọc {len(df)} dòng dữ liệu.")
+# 2. LÀM SẠCH DỮ LIỆU
+def clean_text(text):
+    if text is None:
+        return ""
+    # loại bỏ thẻ HTML đơn giản
+    text = re.sub(r'<.*?>', ' ', text)
+    # mở rộng từ viết tắt (nếu thư viện có sẵn)
+    if _HAS_CONTRACTIONS:
+        try:
+            text = contractions.fix(text)
+        except Exception:
+            pass
+    # chuyển về chữ thường
+    text = text.lower()
+    # loại bỏ ký tự không phải chữ a-z và khoảng trắng
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    # chuẩn hóa khoảng trắng
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+# Áp dụng lên df (không dùng biến 'data' vì chưa có)
+df['clean_review'] = df['review'].apply(clean_text)
+
+# 3. Trích chọn đặc trưng - TF-IDF vectorizer (dùng clean_review)
+vectorizer = TfidfVectorizer(max_features=3000, stop_words='english')
+X_tfidf = vectorizer.fit_transform(df['clean_review'])
+print(f"TF-IDF shape: {X_tfidf.shape}")
+
+# 4. Giảm chiều bằng TruncatedSVD
+svd = TruncatedSVD(n_components=100, random_state=42)
+X_reduced = svd.fit_transform(X_tfidf)
+print(f"Sau SVD: {X_reduced.shape}")
+
+# 5. Gộp lại thành DataFrame và lưu
+df_reduced = pd.DataFrame(X_reduced)
+df_reduced['sentiment'] = df['sentiment'].values  # đảm bảo cùng độ dài
+
+df_reduced.to_csv("IMDB_TFIDF_Processed.csv", index=False, encoding='utf-8-sig')
+print("Đã lưu file dữ liệu đã xử lý: IMDB_TFIDF_Processed.csv")
+
+# 6. Lưu mô hình TF-IDF và SVD để dùng lại
+joblib.dump(vectorizer, "vectorizer.pkl")
+joblib.dump(svd, "svd_model.pkl")
+print("Đã lưu vectorizer.pkl và svd_model.pkl.")
